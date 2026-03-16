@@ -3,7 +3,7 @@
 
 from c7n.manager import resources
 from c7n.query import QueryResourceManager, TypeInfo, DescribeSource
-from c7n.tags import RemoveTag, Tag, TagActionFilter, TagDelayedAction
+from c7n.tags import RemoveTag, Tag, TagActionFilter, TagDelayedAction, universal_augment
 from c7n.utils import local_session, type_schema
 from c7n.actions import BaseAction
 from c7n.filters.kms import KmsRelatedFilter
@@ -283,6 +283,33 @@ class StopCustomizationJob(BaseAction):
             client.stop_model_customization_job(jobIdentifier=r['jobArn'])
 
 
+@resources.register('bedrock-model-invocation-job')
+class BedrockModelInvocationJob(QueryResourceManager):
+    """
+    Resource to list batch model invocation jobs.
+
+    :example:
+
+    .. code-block:: yaml
+
+        policies:
+          - name: bedrock-model-invocation-job-inprogress
+            resource: aws.bedrock-model-invocation-job
+            filters:
+              - type: value
+                key: status
+                value: InProgress
+    """
+
+    class resource_type(TypeInfo):
+        service = 'bedrock'
+        enum_spec = ('list_model_invocation_jobs', 'invocationJobSummaries[]', None)
+        detail_spec = ('get_model_invocation_job', 'jobIdentifier', 'jobArn', None)
+        name = 'jobName'
+        id = arn = 'jobArn'
+        permission_prefix = 'bedrock'
+
+
 @resources.register('bedrock-agent')
 class BedrockAgent(QueryResourceManager):
     class resource_type(TypeInfo):
@@ -549,4 +576,53 @@ class DeleteBedrockKnowledgeBase(BaseAction):
             try:
                 client.delete_knowledge_base(knowledgeBaseId=r['knowledgeBaseId'])
             except client.exceptions.ResourceNotFoundException:
+                continue
+
+
+@resources.register('bedrock-inference-profile')
+class BedrockApplicationInferenceProfile(QueryResourceManager):
+    class resource_type(TypeInfo):
+        service = 'bedrock'
+        enum_spec = ('list_inference_profiles', 'inferenceProfileSummaries[]', {
+            'typeEquals': 'APPLICATION'})
+        name = "inferenceProfileName"
+        id = arn = "inferenceProfileArn"
+        arn_type = "application-inference-profile"
+        permission_prefix = 'bedrock'
+        universal_taggable = object()
+        permissions_augment = ("bedrock:ListTagsForResource",)
+
+    augment = universal_augment
+
+
+@BedrockApplicationInferenceProfile.action_registry.register('delete')
+class DeleteBedrockInferenceProfile(BaseAction):
+    """Delete an application inference profile
+
+    :example:
+
+    .. code-block:: yaml
+
+        policies:
+          - name: delete-inference-profile
+            resource: aws.bedrock-inference-profile
+            actions:
+              - type: delete
+    """
+    schema = type_schema('delete')
+    permissions = ('bedrock:DeleteInferenceProfile',)
+
+    def process(self, resources):
+        client = local_session(self.manager.session_factory).client('bedrock')
+        for r in resources:
+            try:
+                client.delete_inference_profile(
+                    inferenceProfileIdentifier=r['inferenceProfileArn']
+                )
+            except client.exceptions.ResourceNotFoundException:
+                continue
+            except client.exceptions.ConflictException as e:
+                self.log.warning(
+                    f"Unable to delete inference profile {r['inferenceProfileArn']}: {e}",
+                )
                 continue
